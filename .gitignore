@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.tmp
+data.json
+schedules/
+Розклад/
+generate_schedules.py
+schedule_example.json
+rozklad*
+_test_*
+_patch*

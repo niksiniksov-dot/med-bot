@@ -17,6 +17,7 @@ import io
 import logging
 from typing import Dict, Any, Optional, List
 
+import time
 import httpx
 from pdf2image import convert_from_path
 import tempfile
@@ -41,7 +42,9 @@ GROUP_NAMES = [
     "4 м/с", "4 ф А", "4 ф Б",
 ]
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODELS = os.getenv("GEMINI_MODELS", "gemini-2.5-flash,gemini-2.0-flash").split(",")
+MAX_RETRIES = 3
+RETRY_DELAY = 10  # seconds
 
 # ── Supabase helpers ────────────────────────────────────────────────
 _sb = httpx.Client(
@@ -172,18 +175,33 @@ def gemini_parse_page(image_b64: str, week_type: str) -> Dict:
 
 Поверни ТІЛЬКИ валідний JSON без markdown та пояснень."""
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}"
-
-    resp = httpx.post(url, json={
+    payload = {
         "contents": [{"parts": [
             {"text": prompt},
             {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
         ]}],
         "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192},
-    }, timeout=120)
+    }
+
+    # Retry with model fallback
+    for model in GEMINI_MODELS:
+        model = model.strip()
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_KEY}"
+        for attempt in range(1, MAX_RETRIES + 1):
+            log.info("  Спроба %d/%d (модель: %s)", attempt, MAX_RETRIES, model)
+            resp = httpx.post(url, json=payload, timeout=120)
+            if resp.status_code == 200:
+                break
+            log.warning("Gemini %s error %d (спроба %d)", model, resp.status_code, attempt)
+            if resp.status_code in (429, 503) and attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY * attempt)
+                continue
+            break
+        if resp.status_code == 200:
+            break
 
     if resp.status_code != 200:
-        log.error("Gemini API error %d: %s", resp.status_code, resp.text[:300])
+        log.error("Gemini API остаточна помилка %d: %s", resp.status_code, resp.text[:300])
         return {}
 
     text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]

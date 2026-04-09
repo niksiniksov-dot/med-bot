@@ -180,7 +180,7 @@ def gemini_parse_page(image_b64: str, week_type: str) -> Dict:
             {"text": prompt},
             {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
         ]}],
-        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 8192},
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 65536},
     }
 
     # Retry with model fallback
@@ -189,35 +189,30 @@ def gemini_parse_page(image_b64: str, week_type: str) -> Dict:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_KEY}"
         for attempt in range(1, MAX_RETRIES + 1):
             log.info("  Спроба %d/%d (модель: %s)", attempt, MAX_RETRIES, model)
-            resp = httpx.post(url, json=payload, timeout=120)
-            if resp.status_code == 200:
+            resp = httpx.post(url, json=payload, timeout=180)
+            if resp.status_code != 200:
+                log.warning("Gemini %s error %d (спроба %d)", model, resp.status_code, attempt)
+                if resp.status_code in (429, 503) and attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY * attempt)
+                    continue
                 break
-            log.warning("Gemini %s error %d (спроба %d)", model, resp.status_code, attempt)
-            if resp.status_code in (429, 503) and attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY * attempt)
+            # Status 200 — спробувати розпарсити JSON
+            text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            if "```" in text:
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError as e:
+                log.warning("Невалідний JSON (спроба %d): %s", attempt, e)
+                log.info("Raw response length: %d chars", len(text))
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY)
                 continue
-            break
-        if resp.status_code == 200:
-            break
 
-    if resp.status_code != 200:
-        log.error("Gemini API остаточна помилка %d: %s", resp.status_code, resp.text[:300])
-        return {}
-
-    text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-
-    # Прибрати markdown обгортку
-    if "```" in text:
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        log.error("Невалідний JSON від Gemini: %s", e)
-        log.debug("Raw: %s", text[:500])
-        return {}
+    log.error("Gemini API: всі спроби вичерпано")
+    return {}
 
 
 def parse_schedule(pdf_bytes: bytes) -> Dict[str, Dict[str, Any]]:

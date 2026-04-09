@@ -41,7 +41,7 @@ GROUP_NAMES = [
     "4 м/с", "4 ф А", "4 ф Б",
 ]
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 # ── Supabase helpers ────────────────────────────────────────────────
 _sb = httpx.Client(
